@@ -1,0 +1,150 @@
+---
+title: "Titanic Prediction"
+author: "Shawvin"
+date: "8/24/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This document will predict which passgenger will survive the Titanic sinking.
+
+
+## Exploratory data analysis
+```{r,comment=""}
+suppressMessages(library(caret))
+suppressMessages(library(DMwR))
+suppressMessages(library(dplyr))
+suppressMessages(library(tidyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(Hmisc))
+if (!file.exists("train.csv"))
+download.file("https://www.kaggle.com/c/titanic/download/train.csv","train.csv")
+if (!file.exists("test.csv"))
+download.file("https://www.kaggle.com/c/titanic/download/test.csv","test.csv")
+
+train<-read.csv("train.csv")
+test<-read.csv("test.csv")
+names(train)
+names(test)
+test$Survived<-rep(NA,dim(test)[1])
+total<-rbind(train,test)
+str(total)
+```
+
+
+## Missing data and Data Imputation
+```{r,comment=""}
+missingRate<-function(x)
+{if (is.factor(x))
+  {round(sum(x=="")/length(x)*100,3)}
+else 
+  {round(sum(is.na(x))/length(x)*100,3)}
+}
+missing<-sapply(total,missingRate)%>% data.frame()
+names(missing)<-"missingRate"
+missing$column<-rownames(missing)
+rownames(missing)<-1:nrow(missing)
+g<-ggplot(data.frame(missing),aes(x=reorder(column,missingRate),y=missingRate,fill=column))+geom_bar(stat="identity")+coord_flip(ylim=c(0,100))+geom_text(aes(label=missingRate),nudge_y=3)
+g
+```
+As we can see from the plot, there are some missing value in the column of Age,Embarked and Fare.We need to impute the missing value.In the column of Cabin, there are more than 77% missing value,we will not use this column for analysis. 
+
+```{r,comment=""}
+total$Age<-knnImputation(total[,-2])$Age
+total$Embarked<-knnImputation(total[,-2])$Embarked
+total$Fare<-knnImputation(total[,-2])$Fare
+total$Survived<-as.factor(total$Survived)
+train$Survived<-as.factor(train$Survived)
+```
+
+
+## Creating new predictor and Selecitng the predictor 
+```{r,comment=""}
+dim(total)
+n=nrow(train)
+train<-total[1:n,]
+```
+As we can see there are 12 features for each observation. The Survived column is the outcome, so there are 11 features can be used as predictor. we will investigate each varible one by one.
+
+### PassengerId
+This is unique ID for passenger and it's randomly assigned. No good for prediction.
+### Pclass
+```{r,comment=""}
+table(total$Pclass)
+ggplot(train,aes(Pclass,fill=Survived))+geom_bar(position="fill")
+```
+There are three classes. The number of passengers and survival rate differs among three classes. The third class has most passengers and lowest survival rate.
+### Name
+The Names of each passengers vary quite much, but we can extract the title from the name. 
+```{r,comment=""}
+title<-function(x){
+  strsplit(x,"[,.]")[[1]][2]
+}
+total$Title<-sapply(as.character(total$Name),title)
+```
+### Sex and Age
+```{r,comment=""}
+table(total$Sex)
+quantile(total$Age)
+ggplot(train,aes(Sex,fill=Survived))+geom_bar(position="fill")
+ggplot(train,aes(cut2(Age,18),fill=Survived))+geom_bar(position="fill")
+```
+The survival rate for female is higher than male and for age under 18 is more than age above 18.
+### Sibsp and parch
+These two parameter indicate the number of siblings or spouse and the number of parents or children ob the ship.
+```{r,comment=""}
+ggplot(train,aes(SibSp,fill=Survived))+geom_bar(position="fill")
+ggplot(train,aes(Parch,fill=Survived))+geom_bar(position="fill")
+total$Familysize=total$SibSp+total$Parch
+```
+There is trends that the survival rate decreases as there are more family members on board. We combine these two varible to Familysize.
+### Ticket
+```{r,comment=""}
+str(total$Ticket)
+```
+```{r,comment=""}
+n=nrow(train)
+train<-total[1:n,]
+test<-total[-(1:n),]
+inTrain<-createDataPartition(train$Survived,p=0.8,list = FALSE)
+subtrain<-train[inTrain,]
+subtest<-train[-inTrain,]
+traincontrol<-trainControl(method="cv")
+traindata<-subtrain[,-c(1,4,11)]
+modFit<-train(as.factor(Survived)~.,data=traindata,method="rf",trControl=traincontrol)
+modFit2<-train(as.factor(Survived)~.,data=traindata,method="rpart",trControl=traincontrol)
+modFit3<-train(as.factor(Survived)~.,data=traindata,method="gbm",trControl=traincontrol,verbose=FALSE)
+modFit4<-train(as.factor(Survived)~.,data=traindata,method="nb",trControl=traincontrol)
+modFit
+modFit2
+modFit3
+```
+
+
+## Combining predictors
+```{r,comment=""}
+pred1<-predict(modFit,subtrain)
+pred2<-predict(modFit2,subtrain)
+pred3<-predict(modFit3,subtrain)
+predDF<-data.frame(v1=pred1,v2=pred2,v3=pred3,Survived=subtrain$Survived)
+combmodFit<-train(Survived~.,data=predDF,method="gam")
+
+pred1V<-predict(modFit,subtest)
+pred2V<-predict(modFit2,subtest)
+pred3V<-predict(modFit3,subtest)
+predVDF<-data.frame(v1=pred1V,v2=pred2V,v3=pred3V)
+table(subtest$Survived,predict(combmodFit,predVDF))
+
+pred1Vt<-predict(modFit,test)
+pred2Vt<-predict(modFit2,test)
+pred3Vt<-predict(modFit3,test)
+predVDFt<-data.frame(v1=pred1Vt,v2=pred2Vt,v3=pred3Vt)
+test$Survived<-predict(combmodFit,predVDFt)
+write.csv(test[,1:2],"result.csv",row.names = FALSE)
+```
+
+

@@ -1,0 +1,75 @@
+---
+title: "Titanic Prediction"
+author: "Shawvin"
+date: "8/24/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This document will predict which passgenger will survive the Titanic sinking.
+
+
+## Exploratory data analysis
+```{r,comment=""}
+suppressMessages(library(caret))
+suppressMessages(library(DMwR))
+suppressMessages(library(dplyr))
+suppressMessages(library(tidyr))
+suppressMessages(library(ggplot2))
+if (!file.exists("train.csv"))
+download.file("https://www.kaggle.com/c/titanic/download/train.csv","train.csv")
+if (!file.exists("test.csv"))
+download.file("https://www.kaggle.com/c/titanic/download/test.csv","test.csv")
+
+train<-read.csv("train.csv")
+test<-read.csv("test.csv")
+names(train)
+names(test)
+test$Survived<-rep(NA,dim(test)[1])
+total<-rbind(train,test)
+str(total)
+```
+
+
+## Data Imputation
+```{r,comment=""}
+missingRate<-function(x)
+{if (is.factor(x))
+  {round(sum(x=="")/length(x)*100,3)}
+else 
+  {round(sum(is.na(x))/length(x)*100,3)}
+}
+missing<-sapply(total,missingRate)%>% data.frame()
+names(missing)<-"missingRate"
+missing$column<-rownames(missing)
+rownames(missing)<-1:nrow(missing)
+g<-ggplot(data.frame(missing),aes(x=reorder(column,missingRate),y=missingRate,fill=column))+geom_bar(stat="identity")+coord_flip(ylim=c(0,100))+geom_text(aes(label=missingRate),nudge_y=3)
+g
+```
+As we can see from the plot, there are some missing value in the column of Age,Embarked and Fare.We need to impute the missing value.In the column of Cabin, there are more than 77% missing value,we will not use this column for analysis. 
+
+```{r,comment=""}
+total$Age<-knnImputation(total[,-2])$Age
+total$Embarked<-knnImputation(total[,-2])$Embarked
+total$Fare<-knnImputation(total[,-2])$Fare
+```
+
+
+## Selecitng the predictor and buidling the model
+```{r,comment=""}
+total$Survived<-as.factor(total$Survived)
+n=nrow(train)
+train<-total[1:n,]
+test<-total[-(1:n),]
+inTrain<-createDataPartition(train$Survived,p=0.8,list = FALSE)
+subtrain<-train[inTrain,]
+subtest<-train[-inTrain,]
+traincontrol<-trainControl(method="cv")
+modFit<-train(as.factor(Survived)~.,data=train[,-c(1,4,11)],method="rf",trControl=traincontrol)
+```
+
+
